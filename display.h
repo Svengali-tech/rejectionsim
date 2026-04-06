@@ -41,72 +41,29 @@ inline void printEnergyBar(int energy, int maxEnergy) {
     std::cout << "] " << energy << "/" << maxEnergy << "\n";
 }
 
-// Full HUD. Prints everything the player needs to see at a glance.
-// Called at the top of each input loop iteration.
-inline void printHUD(const Player& p) {
-    std::cout << "\n";
-    std::cout << BOLD << "  REJECTION SIMULATOR 3000" << RESET;
-    std::cout << DIM << "  Day " << p.day << RESET;
-    std::cout << "  [" << tierName(p.tier) << "]";
-    if (p.prestige > 0)
-        std::cout << BMAGENTA << "  Prestige " << p.prestige << RESET;
-    std::cout << "\n";
-
-    printSeparator();
-
-    // Row 1: application stats
-    std::cout << "Applied: "     << BOLD  << std::setw(4) << p.applied     << RESET
-              << "  Rejected: "  << RED   << BOLD << std::setw(4) << p.rejected  << RESET
-              << "  Ghosted: "   << DIM   << std::setw(4) << p.ghosted     << RESET
-              << "  ATS: "       << DIM   << std::setw(3) << p.atsFailed   << RESET << "\n";
-
-    // Row 2: pipeline stats
-    std::cout << "Interviews: "  << YELLOW << BOLD << std::setw(3) << p.interviews << RESET
-              << "  Offers: "    << GREEN  << BOLD << std::setw(4) << p.offers     << RESET
-              << "  Networked: " << BCYAN  << std::setw(4) << p.networked          << RESET
-              << "  Connects: "  << BCYAN  << std::setw(4) << p.connections        << RESET << "\n";
-
-    // Row 3: reputation and referral status
-    std::cout << "Reputation: "  << std::setw(3) << p.reputation
-              << " (" << p.reputationLabel() << ")";
-    if (p.hasReferral)
-        std::cout << "  " << BGREEN << "[REFERRAL ACTIVE]" << RESET;
-    std::cout << "\n";
-
-    // Row 4: season
-    std::cout << "Market: " << DIM << seasonName(p.season) << RESET << "\n";
-
-    // Skills block -- compact single-line format to keep HUD scannable
-    std::cout << "Skills: "
-              << "Leet Lv" << p.skills.leetcodeLevel
-              << " [" << skillLevelLabel(p.skills.leetcodeLevel) << "]  "
-              << "Portfolio Lv" << p.skills.portfolioLevel
-              << " [" << skillLevelLabel(p.skills.portfolioLevel) << "]  "
-              << "Clout Lv" << p.skills.cloutLevel
-              << " [" << skillLevelLabel(p.skills.cloutLevel) << "]\n";
-
-    // Bars
-    printHopeBar(p.hope);
-    printEnergyBar(p.energy, p.maxEnergy);
-
-    printSeparator();
-}
+// printHUD is defined in main.cpp (requires full Player type)
 
 // Prints the command menu. Called once at startup and after [h]elp.
 inline void printHelp() {
     std::cout << "\n";
     std::cout << BOLD << "  Commands:\n" << RESET;
-    std::cout << "  [a] apply            -- send an application (costs 1 energy)\n";
-    std::cout << "  [n] network          -- build connections (costs 2 energy)\n";
-    std::cout << "  [t leet]             -- grind leetcode, improves technical round\n";
-    std::cout << "  [t portfolio]        -- work on projects, improves ATS + phone screen\n";
-    std::cout << "  [t clout]            -- build public presence, improves final round\n";
-    std::cout << "  [s] sleep            -- end the day, refill energy\n";
-    std::cout << "  [p] profile          -- view full stats and skill details\n";
-    std::cout << "  [l] leaderboard      -- view local high scores\n";
-    std::cout << "  [h] help             -- show this menu\n";
-    std::cout << "  [q] quit             -- save and exit\n";
-    std::cout << "  [r] reset            -- wipe save and start over\n";
+    std::cout << "  [a]           apply        -- send an application (costs 1 energy)\n";
+    std::cout << "  [n]           network      -- build connections (costs 2 energy)\n";
+    std::cout << "  [t leet]      train         -- grind leetcode, improves technical round\n";
+    std::cout << "  [t portfolio] train         -- work on projects, improves ATS + phone\n";
+    std::cout << "  [t clout]     train         -- build presence, improves final round\n";
+    std::cout << "  [i]           prep          -- interview prep, one-time +20% (costs 2)\n";
+    std::cout << "  [s]           sleep         -- end the day, refill energy\n";
+    std::cout << "  [c]           cover letter  -- change cover letter strategy\n";
+    std::cout << "  [x]           switch track  -- SWE / Finance / Consulting\n";
+    std::cout << "  [v]           view board    -- job tracking board\n";
+    std::cout << "  [p]           profile       -- full stats and skills\n";
+    std::cout << "  [z]           achievements  -- view unlocked achievements\n";
+    std::cout << "  [l]           leaderboard   -- local high scores\n";
+    std::cout << "  [vent]        vent          -- +5 hope, no judgment\n";
+    std::cout << "  [h]           help          -- show this menu\n";
+    std::cout << "  [q]           quit          -- save and exit\n";
+    std::cout << "  [r]           reset         -- wipe save and start over\n";
     std::cout << "\n";
 }
 
@@ -147,31 +104,4 @@ inline void printOfferBanner(const std::string& co, const std::string& role) {
     std::cout << "\n  " << BOLD << co << " -- " << role << RESET << "\n\n";
 }
 
-// Prints game-over / final summary screen.
-inline void printFinalSummary(const Player& p) {
-    std::cout << "\n" << BOLD << "  -- Final Stats --\n" << RESET;
-    std::cout << "  Days played:    " << p.day           << "\n";
-    std::cout << "  Applied:        " << p.applied       << "\n";
-    std::cout << "  ATS filtered:   " << p.atsFailed     << "\n";
-    std::cout << "  Rejected:       " << p.rejected      << "\n";
-    std::cout << "  Ghosted:        " << p.ghosted       << "\n";
-    std::cout << "  Interviews:     " << p.interviews    << "\n";
-    std::cout << "  Offers:         " << p.offers        << "\n";
-    std::cout << "  Networked:      " << p.networked     << "\n";
-    std::cout << "  Prestige:       " << p.prestige      << "\n";
-    std::cout << "  Tier:           " << tierName(p.tier)<< "\n";
-    std::cout << "  Reputation:     " << p.reputation << " (" << p.reputationLabel() << ")\n";
-    std::cout << "  Hope remaining: " << p.hope          << "%\n";
-    if (p.fastestOffer > 0)
-        std::cout << "  Fastest offer:  Day " << p.fastestOffer << "\n";
-    std::cout << "\n";
-
-    if (p.offers > 0)
-        std::cout << GREEN << BOLD << "  You got an offer. The grind was worth it. Maybe.\n\n" << RESET;
-    else if (p.applied == 0)
-        std::cout << "  You didn't apply once. Bold strategy.\n\n";
-    else if (p.hope <= 0)
-        std::cout << RED << "  Hope at zero. The market won. It usually does.\n\n" << RESET;
-    else
-        std::cout << "  Still got " << p.hope << "% hope. That's more than most.\n\n";
-}
+// printFinalSummary is defined in main.cpp

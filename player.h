@@ -6,20 +6,18 @@
 #include "colors.h"
 #include "utils.h"
 #include "skills.h"
+#include "burnout.h"
+#include "streaks.h"
+#include "difficulty.h"
+#include "events.h"
+#include "coverletter.h"
+#include "prep.h"
+#include "careers.h"
 
-// Resume tiers in order. Each prestige level unlocks better base odds.
-// Junior -> Mid -> Senior -> Staff -> Principal
-enum class ResumeTier {
-    Junior    = 0,
-    Mid       = 1,
-    Senior    = 2,
-    Staff     = 3,
-    Principal = 4
-};
+enum class ResumeTier { Junior=0, Mid=1, Senior=2, Staff=3, Principal=4 };
 
-// Returns the display name for a given resume tier.
 inline std::string tierName(ResumeTier t) {
-    switch (t) {
+    switch(t) {
         case ResumeTier::Junior:    return "Junior";
         case ResumeTier::Mid:       return "Mid-Level";
         case ResumeTier::Senior:    return "Senior";
@@ -29,31 +27,21 @@ inline std::string tierName(ResumeTier t) {
     return "Unknown";
 }
 
-// Season affects base acceptance rates across the board.
-// Bull = hot market, Bear = freeze, everything in between.
-enum class Season {
-    BullMarket   = 0,   // +20% to all pass rates
-    NormalMarket = 1,   // baseline rates
-    SlowMarket   = 2,   // -10% to all pass rates
-    BearMarket   = 3,   // -25% to all pass rates, layoffs everywhere
-    Freezing     = 4    // -40%, hiring freeze memos going out daily
-};
+enum class Season { BullMarket=0, NormalMarket=1, SlowMarket=2, BearMarket=3, Freezing=4 };
 
 inline std::string seasonName(Season s) {
-    switch (s) {
-        case Season::BullMarket:   return "Bull Market (everyone's hiring)";
+    switch(s) {
+        case Season::BullMarket:   return "Bull Market";
         case Season::NormalMarket: return "Normal Market";
-        case Season::SlowMarket:   return "Slow Market (budget reviews)";
-        case Season::BearMarket:   return "Bear Market (layoffs trending)";
-        case Season::Freezing:     return "Hiring Freeze (good luck)";
+        case Season::SlowMarket:   return "Slow Market";
+        case Season::BearMarket:   return "Bear Market";
+        case Season::Freezing:     return "Hiring Freeze";
     }
     return "Unknown";
 }
 
-// Returns the pass rate modifier for the current season.
-// Applied as an additive percentage bonus/penalty to each interview stage.
 inline int seasonModifier(Season s) {
-    switch (s) {
+    switch(s) {
         case Season::BullMarket:   return 20;
         case Season::NormalMarket: return 0;
         case Season::SlowMarket:   return -10;
@@ -63,81 +51,77 @@ inline int seasonModifier(Season s) {
     return 0;
 }
 
-// Core player state. Everything the game tracks about the player lives here.
-// Pass this by reference to any function that needs to read or modify player state.
 struct Player {
-    // --- Progression ---
-    int         prestige      = 0;        // number of offers accepted (prestige level)
-    ResumeTier  tier          = ResumeTier::Junior;
-    int         reputation    = 50;       // 0-100: affects referral quality and callback rate
-    int         connections   = 0;        // earned through networking, unlocks referrals
-    bool        hasReferral   = false;    // set when networking pays off, consumed on next apply
+    // Progression
+    int            prestige       = 0;
+    ResumeTier     tier           = ResumeTier::Junior;
+    int            reputation     = 50;
+    int            connections    = 0;
+    bool           hasReferral    = false;
+    CareerTrack    track          = CareerTrack::SoftwareEng;
 
-    // --- Resources ---
-    int         hope          = 100;      // 0-100: the main emotional stat
-    int         energy        = 10;       // refills each "day", capped at maxEnergy
-    int         maxEnergy     = 10;       // increases with prestige
-    int         day           = 1;        // current in-game day
+    // Resources
+    int            hope           = 100;
+    int            energy         = 10;
+    int            maxEnergy      = 10;
+    int            day            = 1;
 
-    // --- Stats ---
-    int         applied       = 0;
-    int         rejected      = 0;
-    int         ghosted       = 0;
-    int         interviews    = 0;        // times entered interview pipeline
-    int         offers        = 0;        // offers received (not necessarily accepted)
-    int         offersAccepted= 0;        // prestige triggers on accept
-    int         networked     = 0;        // times networking action used
-    int         atsFailed     = 0;        // auto-rejected by ATS before human saw it
+    // Stats
+    int            applied        = 0;
+    int            rejected       = 0;
+    int            ghosted        = 0;
+    int            interviews     = 0;
+    int            offers         = 0;
+    int            offersAccepted = 0;
+    int            networked      = 0;
+    int            atsFailed      = 0;
+    int            ventCount      = 0;
 
-    // --- Market ---
-    Season      season        = Season::NormalMarket;
-    int         daysInSeason  = 0;        // counts up; season rotates every ~10 days
+    // Track coverage for achievements
+    bool           appliedSWE     = false;
+    bool           appliedFin     = false;
+    bool           appliedCon     = false;
 
-    // --- Skills ---
-    // Actively leveled by the player via [t leet/portfolio/clout].
-    // Each skill adds a direct bonus to specific interview stages.
-    Skills      skills;
+    // Market
+    Season         season         = Season::NormalMarket;
+    int            daysInSeason   = 0;
 
-    // --- Leaderboard tracking ---
-    int         fastestOffer  = -1;       // day number when first offer arrived, -1 = none yet
+    // Systems
+    Skills         skills;
+    Burnout        burnout;
+    RejectionStreak streak;
+    Difficulty     difficulty     = Difficulty::Normal;
+    CoverLetterStyle coverLetter  = CoverLetterStyle::None;
+    PrepState      prep;
+    EventSlot      eventSlot;
 
-    // Advances one game day. Refills energy, ages the season, fires LinkedIn pings.
-    // Returns true if the season changed (caller can print a market update).
+    // Leaderboard
+    int            fastestOffer   = -1;
+
     bool advanceDay();
-
-    // Bumps prestige by 1 and upgrades the resume tier.
-    // Called when the player accepts an offer.
     void prestige_up();
-
-    // Reputation helpers
-    void reputationUp(int amount)   { reputation = clamp(reputation + amount, 0, 100); }
-    void reputationDown(int amount) { reputation = clamp(reputation - amount, 0, 100); }
-
-    // Returns the effective pass rate for a stage, blending tier bonus + season modifier.
-    // baseRate is the raw % chance (e.g. 45 for technical round).
-    int effectiveRate(int baseRate) const;
-
-    // Returns the display label for the current reputation bracket.
+    void reputationUp(int n)   { reputation = clamp(reputation+n, 0, 100); }
+    void reputationDown(int n) { reputation = clamp(reputation-n, 0, 100); }
+    int  effectiveRate(int baseRate) const;
     std::string reputationLabel() const;
 };
 
-// --- Player method implementations ---
-
 inline bool Player::advanceDay() {
     day++;
-    energy = maxEnergy;   // new day, full energy
+    energy = maxEnergy;
     daysInSeason++;
+    burnout.onRest();
+    eventSlot.tick();
 
-    // Season rotates every 10 days. Randomly picks the next one.
     bool changed = false;
     if (daysInSeason >= 10) {
         daysInSeason = 0;
-        int roll = randRange(0, 4);
+        const auto& cfg = getDifficultyConfig(difficulty);
+        int roll = randRange(0,4);
+        if (cfg.bullMarketBias && roll >= 2) roll = randRange(0,1);
+        if (cfg.bearMarketBias && roll <= 2) roll = randRange(3,4);
         Season next = static_cast<Season>(roll);
-        if (next != season) {
-            season = next;
-            changed = true;
-        }
+        if (next != season) { season = next; changed = true; }
     }
     return changed;
 }
@@ -145,41 +129,29 @@ inline bool Player::advanceDay() {
 inline void Player::prestige_up() {
     prestige++;
     offersAccepted++;
-
-    // Upgrade tier up to Principal cap
-    int nextTier = clamp(static_cast<int>(tier) + 1, 0, 4);
+    int nextTier = clamp(static_cast<int>(tier)+1, 0, 4);
     tier = static_cast<ResumeTier>(nextTier);
-
-    // Each prestige level adds one max energy (more stamina as you get better)
-    maxEnergy = clamp(maxEnergy + 1, 10, 15);
-
-    // Accepting an offer is good for your reputation
+    maxEnergy = clamp(maxEnergy+1, 10, 15);
     reputationUp(10);
+    burnout.reset();
+    streak.onOffer();
 }
 
 inline int Player::effectiveRate(int baseRate) const {
-    // Tier bonus: each prestige level adds 5% to pass rates
-    int tierBonus = static_cast<int>(tier) * 5;
-
-    // Referral bonus: 3x the base pass rate (capped so it doesn't exceed 95)
+    const auto& cfg = getDifficultyConfig(difficulty);
     int rate = baseRate;
-    if (hasReferral) rate = clamp(rate * 3, 0, 95);
-
-    // Skill bonuses applied based on which stage this rate is for.
-    // We infer the stage from the base rate value since each stage has a unique base.
-    // ATS (80) and phone screen (55) benefit from portfolio strength.
-    // Technical (45) benefits from leetcode grind.
-    // Final round (35) benefits from network clout.
-    if (baseRate == 80 || baseRate == 55) {
-        rate += skillBonus(skills.portfolioLevel);
-    } else if (baseRate == 45) {
-        rate += skillBonus(skills.leetcodeLevel);
-    } else if (baseRate == 35) {
-        rate += skillBonus(skills.cloutLevel);
-    }
-
-    rate += tierBonus + seasonModifier(season);
-    return clamp(rate, 5, 95);   // always at least 5% chance, never guaranteed
+    if (hasReferral) rate = clamp(rate*3, 0, 95);
+    rate += static_cast<int>(tier) * 5;
+    // Skill bonuses by stage (inferred from typical base rates per track)
+    if      (baseRate >= 50) rate += skillBonus(skills.portfolioLevel);
+    else if (baseRate >= 38) rate += skillBonus(skills.leetcodeLevel);
+    else                     rate += skillBonus(skills.cloutLevel);
+    if (prep.active) rate += prep.bonus;
+    rate += seasonModifier(season);
+    rate += eventSlot.modifier();
+    rate += cfg.passRateMod;
+    rate += burnoutPenalty(burnout.level);
+    return clamp(rate, 5, 95);
 }
 
 inline std::string Player::reputationLabel() const {
