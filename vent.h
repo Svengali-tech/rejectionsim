@@ -125,6 +125,7 @@ inline std::string pickSignOff(int stage) {
 // If the player has 2+ pending offers, they can use one to negotiate the other.
 
 struct OfferInHand {
+    int         id     = 0;
     std::string company;
     std::string role;
     int         base;     // $k

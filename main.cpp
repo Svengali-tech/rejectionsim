@@ -23,13 +23,43 @@
 #include "networking.h"
 #include "interviews.h"
 #include "offer.h"
+#include "waiting.h"
+#include "httpclient.h"
 #include "saveload.h"
+
+// ---- GAME STATE ---------------------------------------------------------------
+// Holds systems that don't need to be serialized to the save file every action.
+
+struct GameState {
+    WaitQueue                waitQueue;
+    std::vector<OfferInHand> liveOffers;   // live offers in hand for competing mechanic
+    int nextOfferId = 1;
+
+    void addOffer(const std::string& company, const std::string& role, int base) {
+        OfferInHand o;
+        o.id      = nextOfferId++;
+        o.company = company;
+        o.role    = role;
+        o.base    = base;
+        o.active  = true;
+        liveOffers.push_back(o);
+    }
+
+    bool hasCompetingOffer() const { return liveOffers.size() >= 2; }
+
+    void removeOffer(int id) {
+        liveOffers.erase(
+            std::remove_if(liveOffers.begin(), liveOffers.end(),
+                [id](const OfferInHand& o){ return o.id == id; }),
+            liveOffers.end());
+    }
+};
 
 // ---- DISPLAY ------------------------------------------------------------------
 
 
 
-void printHUD(const Player& p, const StoryState& story) {
+void printHUD(const Player& p, const StoryState& story, const GameState& gs) {
     std::cout << "\n";
     std::cout << BOLD << "  REJECTION SIMULATOR 3000" << RESET
               << DIM  << "  Day " << p.day << RESET
@@ -88,13 +118,28 @@ void printHUD(const Player& p, const StoryState& story) {
     if (story.active) printDebtBar(story);
     printHopeBar(p.hope);
     printEnergyBar(p.energy, p.maxEnergy);
+
+    // Pending wait queue notice
+    printPendingNotice(gs.waitQueue);
+
+    // Live offers notice
+    if (!gs.liveOffers.empty()) {
+        std::cout << GREEN << BOLD << "Offers in hand: " << gs.liveOffers.size() << "  [";
+        for (size_t i = 0; i < gs.liveOffers.size(); i++) {
+            std::cout << gs.liveOffers[i].company << " $" << gs.liveOffers[i].base << "k";
+            if (i + 1 < gs.liveOffers.size()) std::cout << "  |  ";
+        }
+        std::cout << "]\n" << RESET;
+        if (gs.hasCompetingOffer())
+            std::cout << DIM << "  Use [o] to negotiate with a competing offer.\n" << RESET;
+    }
+
     printSeparator();
 }
 
-
 // ---- APPLY --------------------------------------------------------------------
 
-void runApply(Player& p, JobBoard& board) {
+void runApply(Player& p, JobBoard& board, GameState& gs) {
     if (p.energy < 1) {
         std::cout << RED << "  No energy. Sleep ([s]) first.\n" << RESET;
         return;
@@ -224,226 +269,24 @@ void runApply(Player& p, JobBoard& board) {
     }
 
     // ---- INTERVIEW PIPELINE ----
+    // Instead of resolving all stages immediately, enqueue the first stage.
+    // Each subsequent stage is enqueued only when the previous one passes.
+    // Stages resolve on [s] sleep via handleSleep -> resolveWaitQueue.
     p.interviews++;
     p.streak.onProgress();
     p.hope = clamp(p.hope+5, 0, 100);
-    bool hadReferral = p.hasReferral;
     p.hasReferral = false;
-
-    // Consume prep bonus
-    p.prep.consume();
+    p.prep.consume();   // consume prep bonus -- baked into the pass rates we enqueue
 
     std::cout << CYAN << BOLD << "[INTERVIEW PIPELINE]\n" << RESET;
-    std::cout << DIM << "  They actually responded. Suspicious.\n\n" << RESET;
-    board.update(app.id, AppStatus::PhoneScreen, p.day);
-    sleepMs(300);
+    std::cout << DIM << "  They actually responded. Suspicious.\n";
 
-    // Phone screen
-    std::cout << YELLOW << BOLD << "[" << tc.phoneLabel << "]\n" << RESET;
-    std::cout << DIM << "  " << company << " wants 30 minutes of your life.\n" << RESET;
-    sleepMs(500);
-    if (randRange(1,100) > p.effectiveRate(tc.phoneRate)) {
-        p.rejected++;
-        p.hope = clamp(p.hope-15, 0, 100);
-        printf("\a");
-        static const std::vector<std::string> pf = {
-            "  They said 'we'll be in touch.' They were not.",
-            "  You mentioned salary. Call ended shortly after.",
-            "  They had another call. You were not rescheduled.",
-            "  'Role might be changing.' It wasn't. You just failed.",
-        };
-        std::cout << RED << "  >> FAILED\n" << RESET << pickRandom(pf) << "\n";
-        std::cout << DIM << "  " << pickSignOff(1) << RESET << "\n";
-        board.update(app.id, AppStatus::Rejected, p.day);
-        printFeedback(getFeedbackQuality(p.reputation));
-        goto achievement_check;
-    }
-    std::cout << GREEN << "  >> PASSED\n" << RESET;
-    p.reputationUp(2);
-    std::cout << DIM << "  'Strong communicator.' Low bar.\n\n" << RESET;
-    board.update(app.id, AppStatus::Technical, p.day);
-    sleepMs(400);
+    int waitDays = waitDaysForStage(PipelineStage::PhoneScreen, tname);
+    std::cout << "  " << tc.phoneLabel << " scheduled in " << waitDays << " day(s). Sleep to advance.\n\n" << RESET;
 
-    // Technical / case / fit round
-    {
-        // Pick question pool based on track
-        static const std::vector<std::string> sweQ = {
-            "  Q: Reverse a linked list. You blanked for 4 seconds.",
-            "  Q: Two Sum. You did it in O(n^2). They watched.",
-            "  Q: Design a URL shortener. You forgot databases briefly.",
-            "  Q: Dijkstra's. From scratch. No hints.",
-            "  Q: LRU cache. Logic right. Syntax: a mess.",
-        };
-        const std::vector<std::string>* qpool =
-            (p.track==CareerTrack::Finance)    ? &FINANCE_TECH_QUESTIONS :
-            (p.track==CareerTrack::Consulting) ? &CONSULTING_CASE_QUESTIONS : &sweQ;
-
-        std::cout << YELLOW << BOLD << "[" << tc.techLabel << "]\n" << RESET;
-        std::cout << pickRandom(*qpool) << "\n";
-        sleepMs(600);
-
-        if (randRange(1,100) > p.effectiveRate(tc.techRate)) {
-            p.rejected++;
-            p.hope = clamp(p.hope-20, 0, 100);
-            printf("\a");
-            static const std::vector<std::string> tf = {
-                "  Feedback: 'Didn't demonstrate strong problem solving.'",
-                "  Feedback: 'More optimal solution expected.' You had O(n log n).",
-                "  No feedback. Portal: 'position filled.'",
-                "  They said feedback was coming. It never came.",
-            };
-            std::cout << RED << "  >> FAILED\n" << RESET << pickRandom(tf) << "\n";
-            std::cout << DIM << "  " << pickSignOff(2) << RESET << "\n";
-            board.update(app.id, AppStatus::Rejected, p.day);
-            printFeedback(getFeedbackQuality(p.reputation));
-            goto achievement_check;
-        }
-        std::cout << GREEN << "  >> PASSED\n" << RESET;
-        p.reputationUp(3);
-        std::cout << DIM << "  'Acceptable.' Frame that.\n\n" << RESET;
-        board.update(app.id, AppStatus::FinalRound, p.day);
-        sleepMs(400);
-    }
-
-    // Competing applicant flavor
-    maybeShowCompetingApplicant();
-
-    // Final round
-    {
-        const std::vector<std::string>* fpool =
-            (p.track==CareerTrack::Finance)    ? &FINANCE_FINAL_QUESTIONS :
-            (p.track==CareerTrack::Consulting) ? &CONSULTING_FINAL_QUESTIONS : nullptr;
-
-        std::cout << MAGENTA << BOLD << "[" << tc.finalLabel << "]\n" << RESET;
-        std::cout << "  " << company << ". Four people. Two hours.\n";
-
-        if (fpool) std::cout << pickRandom(*fpool) << "\n";
-        else {
-            static const std::vector<std::string> sweFinal = {
-                "  'Tell me about a time you failed.' You picked the wrong story.",
-                "  'Where do you see yourself in 5 years?' You said 'here.' Too eager.",
-                "  Four interviewers. Last one asked the same question as the first.",
-            };
-            std::cout << pickRandom(sweFinal) << "\n";
-        }
-        sleepMs(800);
-
-        // Cover letter AI detection at final round
-        int finalRate = p.effectiveRate(tc.finalRate) + coverLetterFinalRoundPenalty(p.coverLetter);
-        if (randRange(1,100) > clamp(finalRate,5,95)) {
-            p.rejected++;
-            p.hope = clamp(p.hope-25, 0, 100);
-            printf("\a");
-            static const std::vector<std::string> ff = {
-                "  'Went with a slightly stronger match.'",
-                "  'Strong candidate pool. Tough decision.'",
-                "  'Different direction.' No further detail.",
-                "  Made it to the final round and lost to someone's college roommate.",
-                "  'Role put on hold.' (Reposted 3 weeks later.)",
-            };
-            std::cout << RED << "  >> FAILED\n" << RESET << pickRandom(ff) << "\n";
-            std::cout << DIM << "  " << pickSignOff(3) << "\n"
-                      << "  Made it to the final round and still lost. Special kind of pain.\n" << RESET;
-            board.update(app.id, AppStatus::Rejected, p.day);
-            printFeedback(getFeedbackQuality(p.reputation));
-            goto achievement_check;
-        }
-        std::cout << GREEN << "  >> PASSED\n" << RESET;
-        p.reputationUp(5);
-    }
-
-    // Reference check
-    {
-        std::cout << DIM << "\n  [Reference check...]\n" << RESET;
-        sleepMs(600);
-        int rr = randRange(1,100);
-        if (rr <= 60) {
-            std::cout << GREEN << "  Reference was clean.\n" << RESET;
-        } else if (rr <= 85) {
-            static const std::vector<std::string> weird = {
-                "  Reference paused for 3 seconds before answering.",
-                "  Reference mentioned 'a situation in Q3' and stopped.",
-                "  Reference said you were 'very... passionate.'",
-            };
-            std::cout << YELLOW << pickRandom(weird) << RESET << "\n";
-            p.hope = clamp(p.hope-5,0,100);
-        } else {
-            std::cout << RED << "  Reference torpedoed it. Offer withdrawn.\n" << RESET;
-            p.rejected++;
-            p.hope = clamp(p.hope-30,0,100);
-            p.reputationDown(10);
-            board.update(app.id, AppStatus::Rejected, p.day);
-            goto achievement_check;
-        }
-    }
-
-    // Offer
-    board.update(app.id, AppStatus::OfferReceived, p.day, "Offer received.");
-    {
-        printf("\a");
-        // Salary by tier
-        int base = randRange(100 + static_cast<int>(p.tier)*30,
-                             150 + static_cast<int>(p.tier)*40);
-        int eq   = randRange(10 + static_cast<int>(p.tier)*15, 80 + static_cast<int>(p.tier)*30);
-        int bon  = randRange(5, 25);
-
-        p.offers++;
-        p.hope = clamp(p.hope+40, 0, 100);
-        if (p.fastestOffer < 0) p.fastestOffer = p.day;
-
-        std::cout << "\n" << GREEN << BOLD
-                  << "  +--------------------------------------------------+\n"
-                  << "  |                  OFFER RECEIVED                  |\n"
-                  << "  +--------------------------------------------------+\n\n" << RESET;
-        std::cout << BOLD << "  " << company << " -- " << role << "\n\n" << RESET;
-        std::cout << "  Base:   " << GREEN << BOLD << "$" << base << "k" << RESET << "\n";
-        std::cout << "  Equity: " << YELLOW << "$" << eq << "k" << RESET << DIM << " (4yr vest, 1yr cliff)" << RESET << "\n";
-        std::cout << "  Bonus:  $" << bon << "k\n\n";
-
-        static const std::vector<std::string> remarks = {
-            "  'Competitive for the market.' It isn't.",
-            "  'Unlimited PTO.' You will never take any.",
-            "  'We move fast here.' You will find out.",
-            "  Equity vests in 4 years. A lot can happen in 4 years.",
-        };
-        std::cout << DIM << pickRandom(remarks) << "\n\n" << RESET;
-
-        // Negotiate?
-        if (askYesNo("Negotiate?")) {
-            int nr = randRange(1,100);
-            if (nr<=40) {
-                int bump = randRange(5,15);
-                std::cout << GREEN << "\n  Up $" << bump << "k. 'Best we can do.'\n" << RESET;
-                std::cout << DIM << "  It wasn't.\n" << RESET;
-            } else if (nr<=70) {
-                std::cout << YELLOW << "\n  'No base flexibility. We can add equity.'\n" << RESET;
-            } else {
-                std::cout << RED << "\n  Rescinded.\n" << RESET;
-                std::cout << DIM << "  'Expectations not aligned.' Both offers gone.\n" << RESET;
-                printf("\a");
-                p.offers--;
-                p.hope = clamp(p.hope-50,0,100);
-                p.reputationDown(5);
-                board.update(app.id, AppStatus::Withdrawn, p.day);
-                if (unlockAchievement("offer_rescinded")) printAchievementUnlock("offer_rescinded");
-                goto achievement_check;
-            }
-        }
-
-        if (askYesNo("Accept?")) {
-            std::cout << GREEN << "\n  Accepted. Start date TBD. Paperwork in 12 days.\n\n" << RESET;
-            p.prestige_up();
-            // Story mode employment
-        } else {
-            std::cout << DIM << "\n  Declined. Recruiter said 'no worries' and moved on.\n" << RESET;
-            p.reputationUp(2);
-            board.update(app.id, AppStatus::Withdrawn, p.day);
-        }
-
-        // Achievement checks for offer
-        if (unlockAchievement("first_offer")) printAchievementUnlock("first_offer");
-        if (hadReferral && unlockAchievement("referral_offer")) printAchievementUnlock("referral_offer");
-    }
+    board.update(app.id, AppStatus::PhoneScreen, p.day, "Waiting for " + tc.phoneLabel + ".");
+    gs.waitQueue.enqueue(app.id, company, role, tname, PipelineStage::PhoneScreen,
+                         p.effectiveRate(tc.phoneRate));
 
 achievement_check:
     // Standard achievement checks after every apply
@@ -540,9 +383,210 @@ void printProfile(const Player& p) {
               << RESET << "\n";
 }
 
+// ---- WAIT QUEUE RESOLUTION ----------------------------------------------------
+// Called on every sleep. Ticks all pending stages and resolves the ones ready.
+// Resolved stages either pass (enqueue next stage) or fail (mark rejected).
+
+void resolveWaitQueue(Player& p, JobBoard& board, GameState& gs, StoryState& story) {
+    auto ready = gs.waitQueue.tick();
+    if (ready.empty()) return;
+
+    std::cout << "\n" << BOLD << "  -- Pending Results --\n" << RESET;
+
+    for (const auto& entry : ready) {
+        bool passed = (randRange(1, 100) <= entry.passRate);
+        std::string tname = entry.track;
+
+        // Get track config for stage labels
+        CareerTrack ct =
+            (tname == "Finance")    ? CareerTrack::Finance    :
+            (tname == "Consulting") ? CareerTrack::Consulting : CareerTrack::SoftwareEng;
+        const TrackConfig& tc = getTrackConfig(ct);
+
+        std::cout << "\n" << BOLD << "  " << entry.company << " -- " << entry.role << "\n" << RESET;
+        std::cout << DIM << "  [" << stageName(entry.stage) << "]\n" << RESET;
+
+        if (!passed) {
+            // Failed this stage
+            printf("\a");
+            p.rejected++;
+            p.streak.onRejection();
+
+            int hopeLoss = (entry.stage == PipelineStage::PhoneScreen)    ? 15 :
+                           (entry.stage == PipelineStage::Technical)       ? 20 :
+                           (entry.stage == PipelineStage::FinalRound)      ? 25 : 15;
+            p.hope = clamp(p.hope - hopeLoss, 0, 100);
+
+            std::cout << RED << "  >> FAILED\n" << RESET;
+            std::cout << waitFailMsg(entry.stage) << "\n";
+            std::cout << DIM << "  " << pickSignOff(
+                (entry.stage == PipelineStage::PhoneScreen) ? 1 :
+                (entry.stage == PipelineStage::Technical)   ? 2 : 3
+            ) << RESET << "\n";
+
+            board.update(entry.appId, AppStatus::Rejected, p.day);
+            printFeedback(getFeedbackQuality(p.reputation));
+            printStreakCommentary(p.streak.current);
+
+        } else {
+            // Passed -- enqueue the next stage
+            std::cout << GREEN << "  >> PASSED\n" << RESET;
+            std::cout << waitPassMsg(entry.stage) << "\n";
+            p.reputationUp(
+                entry.stage == PipelineStage::PhoneScreen ? 2 :
+                entry.stage == PipelineStage::Technical   ? 3 : 5);
+
+            switch (entry.stage) {
+                case PipelineStage::PhoneScreen: {
+                    // Enqueue technical round
+                    int rate = clamp(
+                        (ct == CareerTrack::Finance    ? tc.techRate :
+                         ct == CareerTrack::Consulting ? tc.techRate : tc.techRate)
+                        + skillBonus(p.skills.leetcodeLevel)
+                        + static_cast<int>(p.tier) * 5
+                        + seasonModifier(p.season)
+                        + burnoutPenalty(p.burnout.level),
+                        5, 95);
+                    board.update(entry.appId, AppStatus::Technical, p.day);
+                    gs.waitQueue.enqueue(entry.appId, entry.company, entry.role,
+                                         tname, PipelineStage::Technical, rate);
+                    int wait = waitDaysForStage(PipelineStage::Technical, tname);
+                    std::cout << DIM << "  " << tc.techLabel << " in " << wait << " day(s).\n" << RESET;
+                    break;
+                }
+                case PipelineStage::Technical: {
+                    // Enqueue final round
+                    int rate = clamp(
+                        tc.finalRate
+                        + skillBonus(p.skills.cloutLevel)
+                        + static_cast<int>(p.tier) * 5
+                        + seasonModifier(p.season)
+                        + burnoutPenalty(p.burnout.level)
+                        + coverLetterFinalRoundPenalty(p.coverLetter),
+                        5, 95);
+                    maybeShowCompetingApplicant();
+                    board.update(entry.appId, AppStatus::FinalRound, p.day);
+                    gs.waitQueue.enqueue(entry.appId, entry.company, entry.role,
+                                         tname, PipelineStage::FinalRound, rate);
+                    int wait = waitDaysForStage(PipelineStage::FinalRound, tname);
+                    std::cout << DIM << "  " << tc.finalLabel << " in " << wait << " day(s).\n" << RESET;
+                    break;
+                }
+                case PipelineStage::FinalRound: {
+                    // Enqueue reference check
+                    board.update(entry.appId, AppStatus::OfferPending, p.day);
+                    gs.waitQueue.enqueue(entry.appId, entry.company, entry.role,
+                                         tname, PipelineStage::ReferenceCheck, 75);
+                    std::cout << DIM << "  Reference check initiated.\n" << RESET;
+                    break;
+                }
+                case PipelineStage::ReferenceCheck: {
+                    // Reference passed -- enqueue offer
+                    int base = randRange(100 + static_cast<int>(p.tier)*30,
+                                        150 + static_cast<int>(p.tier)*40);
+                    board.update(entry.appId, AppStatus::OfferReceived, p.day, "Offer incoming.");
+                    gs.waitQueue.enqueue(entry.appId, entry.company, entry.role,
+                                         tname, PipelineStage::Offer, 100, base);
+                    std::cout << DIM << "  Offer being drafted. Check back tomorrow.\n" << RESET;
+                    break;
+                }
+                case PipelineStage::Offer: {
+                    // Offer arrived -- present it
+                    printf("\a");
+                    int base = entry.base > 0 ? entry.base :
+                               randRange(100 + static_cast<int>(p.tier)*30,
+                                         150 + static_cast<int>(p.tier)*40);
+                    int eq  = randRange(10 + static_cast<int>(p.tier)*15, 80 + static_cast<int>(p.tier)*30);
+                    int bon = randRange(5, 25);
+
+                    p.offers++;
+                    p.hope = clamp(p.hope + 40, 0, 100);
+                    if (p.fastestOffer < 0) p.fastestOffer = p.day;
+
+                    std::cout << "\n" << GREEN << BOLD
+                              << "  +--------------------------------------------------+\n"
+                              << "  |                  OFFER RECEIVED                  |\n"
+                              << "  +--------------------------------------------------+\n\n" << RESET;
+                    std::cout << BOLD << "  " << entry.company << " -- " << entry.role << "\n\n" << RESET;
+                    std::cout << "  Base:   " << GREEN << BOLD << "$" << base << "k" << RESET << "\n";
+                    std::cout << "  Equity: " << YELLOW << "$" << eq << "k" << RESET
+                              << DIM << " (4yr vest, 1yr cliff)" << RESET << "\n";
+                    std::cout << "  Bonus:  $" << bon << "k\n\n";
+
+                    static const std::vector<std::string> remarks = {
+                        "  'Competitive for the market.' It isn't.",
+                        "  'Unlimited PTO.' You will never take any.",
+                        "  'We move fast here.' You will find out.",
+                        "  Equity vests in 4 years. A lot can happen.",
+                    };
+                    std::cout << DIM << pickRandom(remarks) << "\n\n" << RESET;
+
+                    // Competing offer mechanic -- if 2+ live offers, offer leverage
+                    gs.addOffer(entry.company, entry.role, base);
+                    if (gs.hasCompetingOffer()) {
+                        std::cout << BBLUE << "  You have multiple offers. Use [o] to negotiate.\n" << RESET;
+                        if (unlockAchievement("comp_offer")) printAchievementUnlock("comp_offer");
+                    }
+
+                    // Standard negotiate / accept flow
+                    if (askYesNo("Negotiate?")) {
+                        int nr = randRange(1, 100);
+                        if (nr <= 40) {
+                            int bump = randRange(5, 15);
+                            std::cout << GREEN << "\n  Up $" << bump << "k. 'Best we can do.'\n" << RESET;
+                            std::cout << DIM << "  It wasn't.\n" << RESET;
+                            base += bump;
+                        } else if (nr <= 70) {
+                            std::cout << YELLOW << "\n  'No base flex. We can add equity.'\n" << RESET;
+                        } else {
+                            std::cout << RED << "\n  Rescinded.\n" << RESET;
+                            std::cout << DIM << "  'Expectations not aligned.'\n" << RESET;
+                            printf("\a");
+                            p.offers--;
+                            p.hope = clamp(p.hope - 50, 0, 100);
+                            p.reputationDown(5);
+                            gs.removeOffer(gs.liveOffers.back().id);
+                            board.update(entry.appId, AppStatus::Withdrawn, p.day);
+                            if (unlockAchievement("offer_rescinded")) printAchievementUnlock("offer_rescinded");
+                            break;
+                        }
+                    }
+
+                    if (askYesNo("Accept?")) {
+                        std::cout << GREEN << "\n  Accepted. Start date TBD. Paperwork in 12 days.\n\n" << RESET;
+                        gs.removeOffer(gs.liveOffers.back().id);
+                        p.prestige_up();
+                        if (story.active) storyOnOffer(story, base);
+                        if (storyTick(story)) { printStoryWin(story); story.active = false; }
+                    } else {
+                        std::cout << DIM << "\n  Declined.\n" << RESET;
+                        p.reputationUp(2);
+                        gs.removeOffer(gs.liveOffers.back().id);
+                        board.update(entry.appId, AppStatus::Withdrawn, p.day);
+                    }
+
+                    // Offer achievements
+                    if (unlockAchievement("first_offer")) printAchievementUnlock("first_offer");
+                    if (p.prestige >= 1 && unlockAchievement("prestige_1")) printAchievementUnlock("prestige_1");
+                    if (p.prestige >= 3 && unlockAchievement("prestige_3")) printAchievementUnlock("prestige_3");
+                    if (p.tier == ResumeTier::Principal && unlockAchievement("principal")) printAchievementUnlock("principal");
+                    if ((p.season == Season::BearMarket || p.season == Season::Freezing)
+                        && unlockAchievement("survived_bear")) printAchievementUnlock("survived_bear");
+                    if (p.season == Season::BullMarket && unlockAchievement("bull_offer")) printAchievementUnlock("bull_offer");
+                    if (p.difficulty == Difficulty::Nightmare && unlockAchievement("nightmare_offer")) printAchievementUnlock("nightmare_offer");
+                    break;
+                }
+            }
+        }
+    }
+
+    gs.waitQueue.compact();
+    std::cout << "\n";
+}
+
 // ---- SLEEP --------------------------------------------------------------------
 
-void handleSleep(Player& p, StoryState& story) {
+void handleSleep(Player& p, StoryState& story, GameState& gs, JobBoard& board) {
     bool seasonChanged = p.advanceDay();
     maybeTriggerEvent(p.eventSlot);
 
@@ -558,22 +602,23 @@ void handleSleep(Player& p, StoryState& story) {
             case Season::BullMarket:
                 std::cout << DIM << "  VCs are throwing money at everything.\n" << RESET; break;
             case Season::BearMarket:
-                std::cout << DIM << "  Layoff announcements trending. Everyone's posting 'next chapter.'\n" << RESET; break;
+                std::cout << DIM << "  Layoff announcements trending. Everyone posting 'next chapter.'\n" << RESET; break;
             case Season::Freezing:
                 std::cout << DIM << "  Hiring freeze memos going out. Roles being pulled mid-process.\n" << RESET; break;
             default: break;
         }
     }
 
-    // Layoff check
+    // Resolve any pending pipeline stages that are ready
+    resolveWaitQueue(p, board, gs, story);
+
+    // Layoff check (only if employed)
     if (shouldLayoff(p)) runLayoffEvent(p);
 
-    // Story mode debt tick
-    if (story.active) {
-        if (storyTick(story)) {
-            printStoryWin(story);
-            story.active = false;
-        }
+    // Story debt tick
+    if (story.active && storyTick(story)) {
+        printStoryWin(story);
+        story.active = false;
     }
 
     std::cout << "\n  Day " << p.day << " begins.\n\n";
@@ -683,6 +728,7 @@ int main() {
     Player     p;
     JobBoard   board;
     StoryState story;
+    GameState  gs;       // wait queue + live offers
 
     // Check for save
     std::ifstream chk(SAVE_FILE);
@@ -702,8 +748,8 @@ int main() {
             printHelp();
         } else {
             std::remove(SAVE_FILE.c_str());
-            p.difficulty = runDifficultySelect();
-            p.track      = CareerTrack::SoftwareEng;
+            p.difficulty  = runDifficultySelect();
+            p.track       = CareerTrack::SoftwareEng;
             p.coverLetter = runCoverLetterSetup();
             printHelp();
         }
@@ -714,8 +760,8 @@ int main() {
             story = runStorySetup();
             p.difficulty = static_cast<Difficulty>(story.startDebt > 60 ? 3 : story.startDebt > 30 ? 2 : 1);
         } else {
-            p.difficulty = runDifficultySelect();
-            p.track      = CareerTrack::SoftwareEng;
+            p.difficulty  = runDifficultySelect();
+            p.track       = CareerTrack::SoftwareEng;
             p.coverLetter = runCoverLetterSetup();
         }
         printHelp();
@@ -723,67 +769,110 @@ int main() {
 
     std::string input;
     while (true) {
-        printHUD(p, story);
+        printHUD(p, story, gs);
         std::cout << "> ";
         std::cin >> input;
 
+        // ---- APPLY ----
         if (input=="a" || input=="apply") {
-            runApply(p, board);
+            runApply(p, board, gs);
             doSave(p);
 
+        // ---- NETWORK ----
         } else if (input=="n" || input=="network") {
             runNetworking(p);
             doSave(p);
 
+        // ---- TRAIN ----
         } else if (input=="t" || input=="train") {
             std::string sub; std::cin >> sub;
-            if (p.energy<1) { std::cout<<RED<<"  No energy.\n"<<RESET; }
+            if (p.energy < 1) { std::cout << RED << "  No energy.\n" << RESET; }
             else { p.energy--; runTraining(p.skills, sub); doSave(p); }
 
+        // ---- INTERVIEW PREP ----
         } else if (input=="i" || input=="prep") {
             runInterviewPrep(p.prep, p.energy);
             doSave(p);
 
+        // ---- SLEEP ----
         } else if (input=="s" || input=="sleep") {
-            handleSleep(p, story);
+            handleSleep(p, story, gs, board);
             doSave(p);
 
+        // ---- COVER LETTER ----
         } else if (input=="c" || input=="cover") {
             p.coverLetter = runCoverLetterSetup();
             doSave(p);
 
+        // ---- SWITCH TRACK ----
         } else if (input=="x" || input=="track") {
             std::cout << "  [1] Software Engineering  [2] Finance  [3] Consulting > ";
             std::string t; std::cin >> t;
-            if      (t=="1") p.track=CareerTrack::SoftwareEng;
-            else if (t=="2") p.track=CareerTrack::Finance;
-            else if (t=="3") p.track=CareerTrack::Consulting;
+            if      (t=="1") p.track = CareerTrack::SoftwareEng;
+            else if (t=="2") p.track = CareerTrack::Finance;
+            else if (t=="3") p.track = CareerTrack::Consulting;
             std::cout << DIM << "  Track: " << trackName(p.track) << "\n\n" << RESET;
             doSave(p);
 
+        // ---- VIEW BOARD (includes pending queue) ----
         } else if (input=="v" || input=="view") {
             printJobBoard(board, p.day);
+            printPendingQueue(gs.waitQueue, p.day);
 
+        // ---- COMPETING OFFER NEGOTIATION ----
+        } else if (input=="o" || input=="offer") {
+            if (!gs.hasCompetingOffer()) {
+                std::cout << DIM << "  Need 2+ live offers to use this. Keep applying.\n" << RESET;
+            } else {
+                // Show live offers and let player pick which to use as leverage
+                std::cout << "\n  Live offers:\n";
+                for (size_t i = 0; i < gs.liveOffers.size(); i++)
+                    std::cout << "  [" << i+1 << "] " << gs.liveOffers[i].company
+                              << " $" << gs.liveOffers[i].base << "k\n";
+                std::cout << "  Use offer [1-" << gs.liveOffers.size() << "] as leverage on another > ";
+                std::string oi; std::cin >> oi;
+                int idx = 0;
+                try { idx = std::stoi(oi) - 1; } catch(...) {}
+                if (idx >= 0 && idx < (int)gs.liveOffers.size()) {
+                    // Use the selected offer to negotiate the other one
+                    const OfferInHand& leverage = gs.liveOffers[idx];
+                    // Pick the other offer as the target
+                    int targetIdx = (idx == 0) ? 1 : 0;
+                    runCompetingOfferNegotiation(leverage, p);
+                } else {
+                    std::cout << DIM << "  Invalid choice.\n" << RESET;
+                }
+                doSave(p);
+            }
+
+        // ---- PROFILE ----
         } else if (input=="p" || input=="profile") {
             printProfile(p);
 
+        // ---- ACHIEVEMENTS ----
         } else if (input=="z" || input=="achievements") {
             printAchievements();
 
+        // ---- LEADERBOARD ----
         } else if (input=="l" || input=="leaderboard") {
             printLeaderboard();
 
+        // ---- VENT ----
         } else if (input=="vent") {
             runVent(p, p.ventCount);
-            if (p.ventCount>=10 && unlockAchievement("vent_10")) printAchievementUnlock("vent_10");
+            if (p.ventCount >= 10 && unlockAchievement("vent_10"))
+                printAchievementUnlock("vent_10");
             doSave(p);
 
+        // ---- HELP ----
         } else if (input=="h" || input=="help") {
             printHelp();
 
+        // ---- QUIT ----
         } else if (input=="q" || input=="quit") {
             submitToLeaderboard(p);
             doSave(p);
+
             // Final summary
             std::cout << "\n" << BOLD << "  -- Final Stats --\n" << RESET;
             std::cout << "  Days:        " << p.day        << "\n";
@@ -794,22 +883,34 @@ int main() {
             std::cout << "  Offers:      " << p.offers     << "\n";
             std::cout << "  Prestige:    " << p.prestige   << "\n";
             std::cout << "  Hope left:   " << p.hope       << "%\n\n";
-            if (p.offers>0) std::cout<<GREEN<<BOLD<<"  You got an offer. The grind was worth it. Maybe.\n\n"<<RESET;
-            else if (p.hope<=0) std::cout<<RED<<"  Hope at zero. The market won.\n\n"<<RESET;
-            else std::cout<<"  Still got "<<p.hope<<"% hope. That's more than most.\n\n";
-            std::cout<<DIM<<"  Progress saved.\n\n"<<RESET;
+
+            if (p.offers > 0)
+                std::cout << GREEN << BOLD << "  You got an offer. The grind was worth it. Maybe.\n\n" << RESET;
+            else if (p.hope <= 0)
+                std::cout << RED << "  Hope at zero. The market won.\n\n" << RESET;
+            else
+                std::cout << "  Still got " << p.hope << "% hope. That's more than most.\n\n";
+
+            // Global leaderboard HTTP submission
+            runGlobalSubmit(p);
+
+            std::cout << DIM << "  Progress saved.\n\n" << RESET;
             break;
 
+        // ---- RESET ----
         } else if (input=="r" || input=="reset") {
             std::cout << "\n  Wipe save? [y/n] > ";
-            std::string c; std::cin>>c;
-            if (c=="y"||c=="Y") {
+            std::string c; std::cin >> c;
+            if (c=="y" || c=="Y") {
                 submitToLeaderboard(p);
                 std::remove(SAVE_FILE.c_str());
-                p = Player(); board = JobBoard(); story = StoryState();
-                p.difficulty = runDifficultySelect();
+                p     = Player();
+                board = JobBoard();
+                story = StoryState();
+                gs    = GameState();
+                p.difficulty  = runDifficultySelect();
                 p.coverLetter = runCoverLetterSetup();
-                std::cout<<GREEN<<"\n  Reset. Same market. New you.\n\n"<<RESET;
+                std::cout << GREEN << "\n  Reset. Same market. New you.\n\n" << RESET;
                 printHelp();
             }
 
