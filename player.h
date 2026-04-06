@@ -5,6 +5,7 @@
 #include <iomanip>
 #include "colors.h"
 #include "utils.h"
+#include "skills.h"
 
 // Resume tiers in order. Each prestige level unlocks better base odds.
 // Junior -> Mid -> Senior -> Staff -> Principal
@@ -92,6 +93,11 @@ struct Player {
     Season      season        = Season::NormalMarket;
     int         daysInSeason  = 0;        // counts up; season rotates every ~10 days
 
+    // --- Skills ---
+    // Actively leveled by the player via [t leet/portfolio/clout].
+    // Each skill adds a direct bonus to specific interview stages.
+    Skills      skills;
+
     // --- Leaderboard tracking ---
     int         fastestOffer  = -1;       // day number when first offer arrived, -1 = none yet
 
@@ -158,6 +164,19 @@ inline int Player::effectiveRate(int baseRate) const {
     // Referral bonus: 3x the base pass rate (capped so it doesn't exceed 95)
     int rate = baseRate;
     if (hasReferral) rate = clamp(rate * 3, 0, 95);
+
+    // Skill bonuses applied based on which stage this rate is for.
+    // We infer the stage from the base rate value since each stage has a unique base.
+    // ATS (80) and phone screen (55) benefit from portfolio strength.
+    // Technical (45) benefits from leetcode grind.
+    // Final round (35) benefits from network clout.
+    if (baseRate == 80 || baseRate == 55) {
+        rate += skillBonus(skills.portfolioLevel);
+    } else if (baseRate == 45) {
+        rate += skillBonus(skills.leetcodeLevel);
+    } else if (baseRate == 35) {
+        rate += skillBonus(skills.cloutLevel);
+    }
 
     rate += tierBonus + seasonModifier(season);
     return clamp(rate, 5, 95);   // always at least 5% chance, never guaranteed

@@ -42,6 +42,12 @@ bool saveGame(const Player& p) {
     f << "season="         << static_cast<int>(p.season) << "\n";
     f << "daysInSeason="   << p.daysInSeason   << "\n";
     f << "fastestOffer="   << p.fastestOffer   << "\n";
+    f << "leetcodeLevel="  << p.skills.leetcodeLevel  << "\n";
+    f << "leetcodeXP="     << p.skills.leetcodeXP     << "\n";
+    f << "portfolioLevel=" << p.skills.portfolioLevel << "\n";
+    f << "portfolioXP="    << p.skills.portfolioXP    << "\n";
+    f << "cloutLevel="     << p.skills.cloutLevel     << "\n";
+    f << "cloutXP="        << p.skills.cloutXP        << "\n";
 
     f.close();
     return true;
@@ -83,6 +89,12 @@ bool loadGame(Player& p) {
         else if (key == "season")         p.season         = static_cast<Season>(v);
         else if (key == "daysInSeason")   p.daysInSeason   = v;
         else if (key == "fastestOffer")   p.fastestOffer   = v;
+        else if (key == "leetcodeLevel")  p.skills.leetcodeLevel  = v;
+        else if (key == "leetcodeXP")     p.skills.leetcodeXP     = v;
+        else if (key == "portfolioLevel") p.skills.portfolioLevel = v;
+        else if (key == "portfolioXP")    p.skills.portfolioXP    = v;
+        else if (key == "cloutLevel")     p.skills.cloutLevel     = v;
+        else if (key == "cloutXP")        p.skills.cloutXP        = v;
     }
 
     f.close();

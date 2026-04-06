@@ -7,6 +7,7 @@
 #include "colors.h"
 #include "utils.h"
 #include "player.h"
+#include "skills.h"
 #include "companies.h"
 #include "display.h"
 #include "interviews.h"
@@ -114,6 +115,25 @@ void handleProfile(const Player& p) {
                   << interviewRate << "%\n";
         std::cout << "  Offer rate:     " << offerRate << "%\n";
     }
+
+    // Full skill breakdown with XP bars
+    std::cout << "\n" << BOLD << "  -- Skills --\n" << RESET;
+    std::cout << DIM
+              << "  Leetcode Grind   -> bonus to technical round pass rate\n"
+              << "  Portfolio        -> bonus to ATS pass rate + phone screen\n"
+              << "  Network Clout    -> bonus to final round + faster referrals\n\n"
+              << RESET;
+    printSkillRow("Leetcode Grind",     p.skills.leetcodeLevel,  p.skills.leetcodeXP);
+    printSkillRow("Portfolio Strength", p.skills.portfolioLevel, p.skills.portfolioXP);
+    printSkillRow("Network Clout",      p.skills.cloutLevel,     p.skills.cloutXP);
+
+    // Show what the current bonuses actually translate to in pass rates
+    std::cout << "\n" << DIM
+              << "  Current pass rate bonuses:\n"
+              << "    Technical round:  +" << skillBonus(p.skills.leetcodeLevel)  << "%\n"
+              << "    ATS + Phone:      +" << skillBonus(p.skills.portfolioLevel) << "%\n"
+              << "    Final round:      +" << skillBonus(p.skills.cloutLevel)     << "%\n"
+              << RESET;
     std::cout << "\n";
 }
 
@@ -143,6 +163,21 @@ int main() {
         if (input == "a" || input == "apply") {
             runApply(p);
             saveGame(p);   // auto-save after every action
+
+        // ---- TRAIN ----
+        // Subcommand comes as a second word: "t leet", "t portfolio", "t clout"
+        } else if (input == "t" || input == "train") {
+            std::string sub;
+            std::cin >> sub;
+
+            // Training costs 1 energy regardless of which skill
+            if (p.energy < 1) {
+                std::cout << RED << "  No energy. Sleep first ([s]).\n" << RESET;
+            } else {
+                p.energy--;
+                runTraining(p.skills, sub);
+                saveGame(p);
+            }
 
         // ---- NETWORK ----
         } else if (input == "n" || input == "network") {

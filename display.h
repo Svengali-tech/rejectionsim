@@ -6,6 +6,7 @@
 #include "colors.h"
 #include "player.h"
 #include "utils.h"
+#include "skills.h"
 
 // Returns the ASCII face for the player character based on current hope level.
 // Displayed in the HUD so the player has a visual emotional anchor.
@@ -75,6 +76,15 @@ inline void printHUD(const Player& p) {
     // Row 4: season
     std::cout << "Market: " << DIM << seasonName(p.season) << RESET << "\n";
 
+    // Skills block -- compact single-line format to keep HUD scannable
+    std::cout << "Skills: "
+              << "Leet Lv" << p.skills.leetcodeLevel
+              << " [" << skillLevelLabel(p.skills.leetcodeLevel) << "]  "
+              << "Portfolio Lv" << p.skills.portfolioLevel
+              << " [" << skillLevelLabel(p.skills.portfolioLevel) << "]  "
+              << "Clout Lv" << p.skills.cloutLevel
+              << " [" << skillLevelLabel(p.skills.cloutLevel) << "]\n";
+
     // Bars
     printHopeBar(p.hope);
     printEnergyBar(p.energy, p.maxEnergy);
@@ -86,14 +96,17 @@ inline void printHUD(const Player& p) {
 inline void printHelp() {
     std::cout << "\n";
     std::cout << BOLD << "  Commands:\n" << RESET;
-    std::cout << "  [a] apply       -- send an application (costs 1 energy)\n";
-    std::cout << "  [n] network     -- build connections (costs 2 energy)\n";
-    std::cout << "  [s] sleep       -- end the day, refill energy\n";
-    std::cout << "  [p] profile     -- view full stats\n";
-    std::cout << "  [l] leaderboard -- view local high scores\n";
-    std::cout << "  [h] help        -- show this menu\n";
-    std::cout << "  [q] quit        -- save and exit\n";
-    std::cout << "  [r] reset       -- wipe save and start over\n";
+    std::cout << "  [a] apply            -- send an application (costs 1 energy)\n";
+    std::cout << "  [n] network          -- build connections (costs 2 energy)\n";
+    std::cout << "  [t leet]             -- grind leetcode, improves technical round\n";
+    std::cout << "  [t portfolio]        -- work on projects, improves ATS + phone screen\n";
+    std::cout << "  [t clout]            -- build public presence, improves final round\n";
+    std::cout << "  [s] sleep            -- end the day, refill energy\n";
+    std::cout << "  [p] profile          -- view full stats and skill details\n";
+    std::cout << "  [l] leaderboard      -- view local high scores\n";
+    std::cout << "  [h] help             -- show this menu\n";
+    std::cout << "  [q] quit             -- save and exit\n";
+    std::cout << "  [r] reset            -- wipe save and start over\n";
     std::cout << "\n";
 }
 
