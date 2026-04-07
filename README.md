@@ -10,11 +10,23 @@ Based on a true story.
 
 ```bash
 # Windows (MSYS2 UCRT64 terminal)
-g++ -std=c++17 -O2 -o rejection_sim.exe main.cpp
+g++ -std=c++17 -O2 -o rejection_sim.exe main.cpp -lwinhttp
 ./rejection_sim.exe
 
-# macOS / Linux
-g++ -std=c++17 -O2 -o rejection_sim main.cpp
+# macOS / Linux (If your code uses libcurl functions, add -lcurl at link time:)
+g++ -std=c++17 -O2 -o rejection_sim main.cpp -lcurl
+
+#(Better (portable) — use pkg-config so compiler uses the correct flags:)
+g++ -std=c++17 -O2 -o rejection_sim main.cpp $(pkg-config --cflags --libs libcurl)
+./rejection_sim
+
+#If you split compile and link:
+g++ -std=c++17 -O2 -c main.cpp -o main.o
+g++ -o rejection_sim main.o -lcurl
+./rejection_sim
+
+# or using pkg-config
+g++ -o rejection_sim main.o $(pkg-config --libs libcurl)
 ./rejection_sim
 ```
 
