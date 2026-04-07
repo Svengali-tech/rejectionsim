@@ -400,8 +400,8 @@ FodyWeavers.xsd
 .containers/
 
 .env
-.envlocal
-.envexample
+.env.local
+.env.example
 
 .qodo
 .vscode
