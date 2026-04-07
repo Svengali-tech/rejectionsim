@@ -402,3 +402,6 @@ FodyWeavers.xsd
 .env
 .envlocal
 .envexample
+
+.qodo
+.vscode
